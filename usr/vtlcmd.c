@@ -230,6 +230,15 @@ void Check_append_only(int argc, char **argv)
 	PrintErrorExit(argv[0], "Append Only : missing Yes / No");
 }
 
+void Check_Add(int argc, char **argv)
+{
+	if (argc != 4)
+		PrintErrorExit(argv[0], "add slot : too many args");
+	else
+		if (strcmp(argv[3], "slot"))
+			PrintErrorExit(argv[0], "add slot : Can only add slot");
+}
+
 void Check_List(int argc, char **argv)
 {
 	if (argc != 4)
@@ -333,9 +342,8 @@ void Check_Params(int argc, char **argv)
 
 			/* Library commands */
 			if (!strcmp(argv[2], "add")) {
-				if (argc == 4)
-					return;
-				PrintErrorExit(argv[0], "add slot");
+				Check_Add(argc, argv);
+				return;
 			}
 			if (!strcmp(argv[2], "online")) {
 				if (argc == 3)
