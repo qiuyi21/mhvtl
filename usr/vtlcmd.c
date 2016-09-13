@@ -88,6 +88,7 @@ static void usage(char *prog)
 	fprintf(stderr, "   delay thread n -> Set thread delay to n seconds\n");
 	fprintf(stderr, "\nLibrary specific commands:\n");
 	fprintf(stderr, "   add slot     -> Add a slot to library\n");
+	fprintf(stderr, "   del tape ID  -> Delete a tape from library\n");
 	fprintf(stderr, "   online       -> To enable library\n");
 	fprintf(stderr, "   offline      -> To take library offline\n");
 	fprintf(stderr, "   list map     -> To list map contents\n");
@@ -95,6 +96,7 @@ static void usage(char *prog)
 	fprintf(stderr, "   open map     -> Open map to allow media export\n");
 	fprintf(stderr, "   close map    -> Close map to allow media import\n");
 	fprintf(stderr, "   load map ID  -> Load media ID into map\n");
+	fprintf(stderr, "   saveconfig   -> Save library config to file\n");
 }
 
 /* check if media (tape) exists in directory (/opt/mhvtl/..) */
@@ -239,6 +241,15 @@ void Check_Add(int argc, char **argv)
 			PrintErrorExit(argv[0], "add slot : Can only add slot");
 }
 
+void Check_Del(int argc, char **argv)
+{
+	if (argc != 5)
+		PrintErrorExit(argv[0], "del tape : too many args");
+	else
+		if (strcmp(argv[3], "tape"))
+			PrintErrorExit(argv[0], "del tape : Can only delete tape");
+}
+
 void Check_List(int argc, char **argv)
 {
 	if (argc != 4)
@@ -345,6 +356,10 @@ void Check_Params(int argc, char **argv)
 				Check_Add(argc, argv);
 				return;
 			}
+			if (!strcmp(argv[2], "del")) {
+				Check_Del(argc, argv);
+				return;
+			}
 			if (!strcmp(argv[2], "online")) {
 				if (argc == 3)
 					return;
@@ -354,6 +369,11 @@ void Check_Params(int argc, char **argv)
 				if (argc == 3)
 					return;
 				PrintErrorExit(argv[0], "offline");
+			}
+			if (!strcmp(argv[2], "saveconfig")) {
+				if (argc == 3)
+					return;
+				PrintErrorExit(argv[0], "saveconfig : too many args");
 			}
 			if (!strcmp(argv[2], "list")) {
 				Check_List(argc, argv);
@@ -513,6 +533,7 @@ int main(int argc, char **argv)
 	if (device_type == TYPE_LIBRARY) {
 		if (!strncmp(buf, "online", 6)) {
 		} else if (!strncmp(buf, "add slot", 8)) {
+		} else if (!strncmp(buf, "del tape", 8)) {
 		} else if (!strncmp(buf, "offline", 7)) {
 		} else if (!strncmp(buf, "open map", 8)) {
 		} else if (!strncmp(buf, "close map", 9)) {
@@ -520,6 +541,7 @@ int main(int argc, char **argv)
 		} else if (!strncmp(buf, "list map", 8)) {
 		} else if (!strncmp(buf, "load map", 8)) {
 		} else if (!strncmp(buf, "verbose", 7)) {
+		} else if (!strncmp(buf, "saveconfig", 10)) {
 		} else if (!strncmp(buf, "debug", 5)) {
 		} else if (!strncmp(buf, "exit", 4)) {
 		} else if (!strncmp(buf, "TapeAlert", 9)) {
@@ -575,6 +597,8 @@ int main(int argc, char **argv)
 
 	if (device_type == TYPE_LIBRARY) {
 		if (!strcmp(argv[2], "add") && !strcmp(argv[3], "slot"))
+			DisplayResponse(ReceiverQid, "");
+		if (!strcmp(argv[2], "del") && !strcmp(argv[3], "tape"))
 			DisplayResponse(ReceiverQid, "");
 		if (!strcmp(argv[2], "open") && !strcmp(argv[3], "map"))
 			DisplayResponse(ReceiverQid, "");

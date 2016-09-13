@@ -87,6 +87,7 @@ struct lu_phy_attr lunit;
 static struct smc_priv smc_slots;
 
 struct s_info *add_new_slot(struct lu_phy_attr *lu);
+static void save_config(struct lu_phy_attr *lu);
 
 static void usage(char *progname)
 {
@@ -345,7 +346,7 @@ static void list_map(struct q_msg *msg)
 }
 
 /* Check existing MAP & Storage slots for existing barcode */
-int already_in_slot(char *barcode)
+struct s_info *already_in_slot(char *barcode)
 {
 	struct list_head *slot_head = &smc_slots.slot_list;
 	struct s_info *sp = NULL;
@@ -358,13 +359,13 @@ int already_in_slot(char *barcode)
 			if (!strncmp((char *)sp->media->barcode, barcode, len)){
 				MHVTL_DBG(3, "Match: %s %s",
 					sp->media->barcode, barcode);
-				return 1;
+				return sp;
 			} else
 				MHVTL_DBG(3, "No match: %s %s",
 					sp->media->barcode, barcode);
 		}
 	}
-	return 0;
+	return NULL;
 }
 
 static struct s_info *locate_empty_map(void)
@@ -439,6 +440,57 @@ static struct m_info *add_barcode(struct lu_phy_attr *lu, char *barcode)
 	return m;
 }
 
+static void del_barcode(struct lu_phy_attr *lu, struct m_info *m)
+{
+	if (m) {
+		list_del(&m->siblings);
+		free(m);
+	}
+	MHVTL_DBG("barcode never existed");
+}
+
+/*
+ * Respond to messageQ 'del tape ID'
+ */
+static int del_tape(struct q_msg *msg)
+{
+	struct s_info *sp = NULL;
+	char *barcode;
+	char *text = &msg->text[9];	/* skip past "del tape " */
+
+	MHVTL_DBG(2, "Delete %s from Library", text);
+
+	barcode = zalloc(MAX_BARCODE_LEN);
+
+	/* No barcode - reject load */
+	if (!barcode) {
+		send_msg("Bad barcode", msg->snd_id);
+		return 0;
+	}
+
+	blank_fill((uint8_t *)barcode, text, MAX_BARCODE_LEN);
+
+	sp = already_in_slot(barcode);	/* Get slot by barcode */
+	if (!sp)
+	{
+		send_msg("OK", msg->snd_id);
+		return 1;
+	}
+
+	if (sp->element_type == DATA_TRANSFER)
+	{
+		send_msg("can't delete, this tape is using", msg->snd_id);
+		return 0;
+	}
+
+	del_barcode(&lunit, sp->media);
+	sp->media = NULL;
+	sp->last_location = 0;		/* Forget where the old media was */
+	setSlotEmpty(sp);
+
+	send_msg("OK", msg->snd_id);
+	return 1;
+}
 
 /* Return zero - failed, non-zero - success */
 static int load_map(struct q_msg *msg)
@@ -533,9 +585,7 @@ static void add_storage_slot(struct q_msg *msg) {
 	int slt_no;
 	char message[20];
 	struct s_info *sp1 = NULL;
-	struct list_head *slot_head = &smc_slots.slot_list;
 	struct smc_priv *smc_p = lunit.lu_private;
-	struct list_head *p = slot_head;
 
 	sp1 = add_new_slot(&lunit);
 
@@ -610,6 +660,8 @@ static int processMessageQ(struct q_msg *msg)
 	}
 	if (!strncmp(msg->text, "add slot", 8))
 		add_storage_slot(msg);
+	if (!strncmp(msg->text, "del tape ", 9))
+		del_tape(msg);
 	if (!strncmp(msg->text, "empty map", 9))
 		empty_map(msg);
 	if (!strncmp(msg->text, "exit", 4))
@@ -622,6 +674,9 @@ static int processMessageQ(struct q_msg *msg)
 		list_map(msg);
 	if (!strncmp(msg->text, "load map ", 9))
 		load_map(msg);
+	if (!strncmp(msg->text, "saveconfig", 10))
+		if (lunit.persist)
+			save_config(&lunit);
 	if (!strncmp(msg->text, "offline", 7)) {
 		current_state = MHVTL_STATE_OFFLINE;
 		lunit.online = 0;
