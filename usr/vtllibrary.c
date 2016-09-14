@@ -444,6 +444,7 @@ static int del_tape(struct q_msg *msg)
 {
 	struct s_info *sp = NULL;
 	char *barcode;
+	int ret = 0;
 	char *text = &msg->text[9];	/* skip past "del tape " */
 
 	MHVTL_DBG(2, "Delete %s from Library", text);
@@ -453,7 +454,7 @@ static int del_tape(struct q_msg *msg)
 	/* No barcode - reject load */
 	if (!barcode) {
 		send_msg("Out of memory", msg->snd_id);
-		return 0;
+		goto out;
 	}
 
 	blank_fill((uint8_t *)barcode, text, MAX_BARCODE_LEN);
@@ -464,13 +465,14 @@ static int del_tape(struct q_msg *msg)
 	{
 		MHVTL_DBG(2, "barcode media never existed in slot");
 		send_msg("OK", msg->snd_id);
-		return 1;
+		ret = 1;
+		goto out;
 	}
 
 	if (sp->element_type == DATA_TRANSFER)
 	{
 		send_msg("can't delete, this tape is using", msg->snd_id);
-		return 0;
+		goto out;
 	}
 
 	list_del(&sp->media->siblings);		/* Delete media from media_list */
@@ -479,7 +481,11 @@ static int del_tape(struct q_msg *msg)
 	setSlotEmpty(sp);
 
 	send_msg("OK", msg->snd_id);
-	return 1;
+	ret = 1;
+
+out:
+	if (barcode) free(barcode);
+	return ret;
 }
 
 /* Return zero - failed, non-zero - success */
@@ -1275,7 +1281,7 @@ static void save_config(struct lu_phy_attr *lu)
 		switch (sp->element_type) {
 		case DATA_TRANSFER:
 			fprintf(ctrl, "Drive %d:\n",
-					sp->slot_location -
+				sp->slot_location -
 						lu_priv->pm->start_drive + 1);
 			break;
 		case MEDIUM_TRANSPORT:
