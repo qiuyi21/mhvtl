@@ -350,13 +350,10 @@ struct s_info *already_in_slot(char *barcode)
 {
 	struct list_head *slot_head = &smc_slots.slot_list;
 	struct s_info *sp = NULL;
-	int len;
-
-	len = strlen(barcode);
 
 	list_for_each_entry(sp, slot_head, siblings) {
 		if (slotOccupied(sp)) {
-			if (!strncmp((char *)sp->media->barcode, barcode, len)){
+			if (!strncmp((char *)sp->media->barcode, barcode, MAX_BARCODE_LEN + 1)){
 				MHVTL_DBG(3, "Match: %s %s",
 					sp->media->barcode, barcode);
 				return sp;
@@ -440,15 +437,6 @@ static struct m_info *add_barcode(struct lu_phy_attr *lu, char *barcode)
 	return m;
 }
 
-static void del_barcode(struct lu_phy_attr *lu, struct m_info *m)
-{
-	if (m) {
-		list_del(&m->siblings);
-		free(m);
-	}
-	MHVTL_DBG("barcode never existed");
-}
-
 /*
  * Respond to messageQ 'del tape ID'
  */
@@ -460,19 +448,21 @@ static int del_tape(struct q_msg *msg)
 
 	MHVTL_DBG(2, "Delete %s from Library", text);
 
-	barcode = zalloc(MAX_BARCODE_LEN);
+	barcode = zalloc(MAX_BARCODE_LEN + 1);
 
 	/* No barcode - reject load */
 	if (!barcode) {
-		send_msg("Bad barcode", msg->snd_id);
+		send_msg("Out of memory", msg->snd_id);
 		return 0;
 	}
 
 	blank_fill((uint8_t *)barcode, text, MAX_BARCODE_LEN);
+	barcode[MAX_BARCODE_LEN] = '\0';
 
 	sp = already_in_slot(barcode);	/* Get slot by barcode */
 	if (!sp)
 	{
+		MHVTL_DBG(2, "barcode media never existed in slot");
 		send_msg("OK", msg->snd_id);
 		return 1;
 	}
@@ -483,7 +473,7 @@ static int del_tape(struct q_msg *msg)
 		return 0;
 	}
 
-	del_barcode(&lunit, sp->media);
+	list_del(&sp->media->siblings);		/* Delete media from media_list */
 	sp->media = NULL;
 	sp->last_location = 0;		/* Forget where the old media was */
 	setSlotEmpty(sp);
@@ -497,8 +487,8 @@ static int load_map(struct q_msg *msg)
 {
 	struct s_info *sp = NULL;
 	struct m_info *mp = NULL;
-	char *barcode;
-	int i;
+	char *barcode, *bcbuf = NULL;
+	int i, ret = 0;
 	int str_len;
 	char *text = &msg->text[9];	/* skip past "load map " */
 
@@ -522,22 +512,28 @@ static int load_map(struct q_msg *msg)
 		send_msg("Bad barcode", msg->snd_id);
 		return 0;
 	}
-
-	if (already_in_slot(barcode)) {
-		send_msg("barcode already in library", msg->snd_id);
-		return 0;
-	}
-
 	if (strlen(barcode) > MAX_BARCODE_LEN) {
 		send_msg("barcode length too long", msg->snd_id);
 		return 0;
 	}
 
+	bcbuf = zalloc(MAX_BARCODE_LEN + 1);
+	if (!bcbuf) {
+		send_msg("Out of memory", msg->snd_id);
+		return 0;
+	}
+	blank_fill((uint8_t *) bcbuf, barcode, MAX_BARCODE_LEN);
+	bcbuf[MAX_BARCODE_LEN] = '\0';
+	if (already_in_slot(bcbuf)) {
+		send_msg("barcode already in library", msg->snd_id);
+		goto out;
+	}
+
 	sp = locate_empty_map();
 	if (sp) {
-		mp = lookup_barcode(&lunit, barcode);
+		mp = lookup_barcode(&lunit, bcbuf);
 		if (!mp)
-			mp = add_barcode(&lunit, barcode);
+			mp = add_barcode(&lunit, bcbuf);
 
 		snprintf((char *)mp->barcode, MAX_BARCODE_LEN, LEFT_JUST_16_STR,
 						barcode);
@@ -553,10 +549,14 @@ static int load_map(struct q_msg *msg)
 		sp->media = mp;
 		sp->media->internal_status = 0;
 		send_msg("OK", msg->snd_id);
-		return 1;
+		ret = 1;
+		goto out;
 	}
 	send_msg("MAP Full", msg->snd_id);
-	return 0;
+
+out:
+	if (bcbuf) free(bcbuf);
+	return ret;
 }
 
 static void open_map(struct q_msg *msg)
