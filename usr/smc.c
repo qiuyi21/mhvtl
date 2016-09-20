@@ -35,6 +35,8 @@
 #include <ctype.h>
 #include <inttypes.h>
 #include <assert.h>
+#include <sys/socket.h>		/* for socket to connect server */
+#include <sys/un.h>			/* too ...*/
 #include "be_byteshift.h"
 #include "scsi.h"
 #include "list.h"
@@ -971,6 +973,72 @@ static int check_tape_load(void)
 	return strncmp("Loaded OK", q.msg.text, 9);
 }
 
+static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
+{
+	int sock, ret = 0;
+	char message[30];
+	struct sockaddr_un servaddr;
+
+	char *barcode;
+	char src_type;
+	int src_num;
+
+	barcode = zalloc(MAX_BARCODE_LEN + 1);
+	if (!barcode){
+		MHVTL_ERR("memory out");
+		goto ret;
+	}
+
+	memcpy(barcode, &s->media->barcode, MAX_BARCODE_LEN + 1);
+	truncate_spaces(barcode, MAX_BARCODE_LEN + 1);
+
+	if (s->element_type == DATA_TRANSFER){
+		src_type = 'D';
+		src_num = s->slot_location - smc_p->pm->start_drive;
+	}else if (s->element_type == STORAGE_ELEMENT){
+		src_type = 'S';
+		src_num = s->slot_location - smc_p->pm->start_storage + 1;
+	}else{
+		MHVTL_ERR("can't eject type: %d", s->element_type);
+		goto ret;
+	}
+
+	MHVTL_DBG(2, "eject tape barcode: %s", s->media->barcode);
+
+	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
+		MHVTL_ERR("create socket failde, error: %s", strerror(errno));
+		goto eject;
+	}
+
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sun_family = AF_UNIX;
+	strcpy(servaddr.sun_path, SOCK_PATH);
+
+
+	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+		MHVTL_ERR("connect socket failde, error: %s", strerror(errno));
+		goto eject;
+	}
+
+	sprintf(message, "eject %s@%c%d", barcode, src_type, src_num);
+	if (write(sock, message, strlen(message)) < 0) {
+		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
+	}
+
+eject:
+	list_del(&s->media->siblings);		/* Delete media from media_list */
+	s->media = NULL;
+	s->last_location = 0;		/* Forget where the old media was */
+	setSlotEmpty(s);
+	ret = 1;
+ret:
+	if (sock)
+		close(sock);
+	if (barcode)
+		free(barcode);
+	return ret;
+}
+
 /*
  * Logically move information from 'src' address to 'dest' address
  */
@@ -1129,6 +1197,15 @@ static int move_slot2slot(struct smc_priv *smc_p, int src_addr,
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;
 	}
+
+	/* if dest slot is MAP, Eject */
+	if (dest->element_type == MAP_ELEMENT) {
+		if (eject_tape(smc_p, src))
+			return SAM_STAT_GOOD;
+		else
+			return SAM_STAT_CHECK_CONDITION;
+	}
+
 	if (slotOccupied(dest)) {
 		sam_illegal_request(E_MEDIUM_DEST_FULL, NULL, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;
@@ -1219,6 +1296,15 @@ static int move_drive2slot(struct smc_priv *smc_p,
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;
 	}
+
+	/* if dest slot is MAP, Eject */
+	if (dest->element_type == MAP_ELEMENT) {
+		if (eject_tape(smc_p, src->slot))
+			return SAM_STAT_GOOD;
+		else
+			return SAM_STAT_CHECK_CONDITION;
+	}
+
 	if (slotOccupied(dest)) {
 		sam_illegal_request(E_MEDIUM_DEST_FULL, NULL, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;

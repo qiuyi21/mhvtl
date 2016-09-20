@@ -11,6 +11,8 @@
 #define OPERATOR	1
 #define ROBOT_ARM	0
 
+#define SOCK_PATH	"/var/run/bingosgw.sock"
+
 struct smc_personality_template {
 	char *name;
 	uint32_t library_has_map:1;
