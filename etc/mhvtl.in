@@ -382,11 +382,11 @@ case "$1" in
 	chown -R $USER:$USER $MHVTL_CONFIG_PATH
 
 	# Build Library media
-	make_vtl_media $USER
-	if [ $? != 0 ]; then
-		echo "make_vtl_media failed.."
-		exit 1
-	fi
+	#make_vtl_media $USER
+	#if [ $? != 0 ]; then
+	#	echo "make_vtl_media failed.."
+	#	exit 1
+	#fi
 
 	# Build Library config - No. of drives & serial Nos etc..
 	# This also loads each tape daemon.

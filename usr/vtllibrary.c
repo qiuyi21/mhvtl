@@ -541,12 +541,12 @@ static int load_map(struct q_msg *msg)
 		if (!mp)
 			mp = add_barcode(&lunit, bcbuf);
 
-		snprintf((char *)mp->barcode, MAX_BARCODE_LEN, LEFT_JUST_16_STR,
-						barcode);
+		snprintf((char *)mp->barcode, MAX_BARCODE_LEN + 1, LEFT_JUST_16_STR,
+					bcbuf);
 		mp->barcode[MAX_BARCODE_LEN] = '\0';
 
 		/* 1 = data, 2 = Clean */
-		mp->cart_type = get_cart_type(barcode);
+		mp->cart_type = get_cart_type(bcbuf);
 		sp->status = STATUS_InEnab | STATUS_ExEnab |
 					STATUS_Access | STATUS_ImpExp |
 					STATUS_Full;
