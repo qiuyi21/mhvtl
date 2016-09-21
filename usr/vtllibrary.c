@@ -1025,12 +1025,13 @@ void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 			MHVTL_ERR("element type error");
 			last_location = slot_number;
 		}
-		MHVTL_DBG(2, "String %s:Barcode %s in DRIVE %d, last_location %d", s, barcode, slt, last_location);
+
+		MHVTL_DBG(2, "init slot message:Barcode %s in DRIVE %d, last_location %d", barcode, slt, last_location);
 
 		dp->slot->media = add_barcode(lu, barcode);
 		dp->slot->media->last_location = last_location;
 		dp->slot->last_location = last_location;
-		setFullStatus(dp->slot, 1);
+		dp->slot->status |= STATUS_Full;
 	}
 	MHVTL_DBG(3, "Slot: %d, start_drive: %d, slot_location: %d",
 			slt, smc_p->pm->start_drive, dp->slot->slot_location);
@@ -1224,25 +1225,6 @@ void init_slot_info(struct lu_phy_attr *lu)
 
 	for (i = 0; i < 4; i++)
 		__init_slot_info(lu, arr[i].type);
-}
-
-/* Return original slot location if empty
- */
-static struct s_info *previous_storage_slot(struct s_info *s,
-						struct list_head *slot_head)
-{
-	struct s_info *sp;	/* Slot Pointer */
-
-	/* Find slot info for 'previous location' */
-	list_for_each_entry(sp, slot_head, siblings) {
-		if (sp->element_type == STORAGE_ELEMENT)
-			if (sp->slot_location == s->last_location)
-				if (!slotOccupied(sp))
-					/* previous location is empty */
-					return sp;
-	}
-
-	return NULL;
 }
 
 /* Return first empty storage slot.

@@ -695,7 +695,9 @@ int create_tape(const char *pcl, const struct MAM *mamp, uint8_t *sam_stat)
 	/* Don't really care if chown() fails or not..
 	 * But lets try anyway
 	 */
-	chown(newMedia, pw->pw_uid, pw->pw_gid);
+	if (chown(newMedia, pw->pw_uid, pw->pw_gid)) {
+		MHVTL_DBG(1, "chown %s failed: %s", newMedia, strerror(errno));
+	}
 
 	datafile = creat(newMedia_data, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
 	if (datafile == -1) {
@@ -720,9 +722,15 @@ int create_tape(const char *pcl, const struct MAM *mamp, uint8_t *sam_stat)
 		rc = 2;
 		goto cleanup;
 	}
-	chown(newMedia_data, pw->pw_uid, pw->pw_gid);
-	chown(newMedia_indx, pw->pw_uid, pw->pw_gid);
-	chown(newMedia_meta, pw->pw_uid, pw->pw_gid);
+	if (chown(newMedia_data, pw->pw_uid, pw->pw_gid)) {
+		MHVTL_DBG(1, "chown %s failed: %s", newMedia_data, strerror(errno));
+	}
+	if (chown(newMedia_indx, pw->pw_uid, pw->pw_gid)) {
+		MHVTL_DBG(1, "chown %s failed: %s", newMedia_indx, strerror(errno));
+	}
+	if (chown(newMedia_meta, pw->pw_uid, pw->pw_gid)) {
+		MHVTL_DBG(1, "chown %s failed: %s", newMedia_meta, strerror(errno));
+	}
 
 	MHVTL_LOG("%s files created", newMedia);
 
