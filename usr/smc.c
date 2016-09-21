@@ -999,25 +999,30 @@ static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 		src_type = 'S';
 		src_num = s->slot_location - smc_p->pm->start_storage + 1;
 	}else{
-		MHVTL_ERR("can't eject type: %d", s->element_type);
+		MHVTL_ERR("can't eject element type: %d", s->element_type);
 		goto ret;
 	}
+
+	list_del(&s->media->siblings);		/* Delete media from media_list */
+	s->media = NULL;
+	s->last_location = 0;		/* Forget where the old media was */
+	setSlotEmpty(s);
+	ret = 1;
 
 	MHVTL_DBG(2, "eject tape barcode: %s", s->media->barcode);
 
 	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
 		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
-		goto eject;
+		goto ret;
 	}
 
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sun_family = AF_UNIX;
 	strcpy(servaddr.sun_path, SOCK_PATH);
 
-
 	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
 		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
-		goto eject;
+		goto ret;
 	}
 
 	sprintf(message, "eject %s@%c%d", barcode, src_type, src_num);
@@ -1025,12 +1030,6 @@ static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
 	}
 
-eject:
-	list_del(&s->media->siblings);		/* Delete media from media_list */
-	s->media = NULL;
-	s->last_location = 0;		/* Forget where the old media was */
-	setSlotEmpty(s);
-	ret = 1;
 ret:
 	if (sock != -1)
 		close(sock);
