@@ -849,6 +849,37 @@ static void update_drive_details(struct lu_phy_attr *lu)
 	fclose(conf);
 }
 
+static void auto_load_tape(struct lu_phy_attr *lu) {
+	struct smc_priv *smc_p = lu->lu_private;
+	struct list_head *drive_list = &smc_p->drive_list;
+	struct d_info *dp;
+	char *cmd;
+
+	list_for_each_entry(dp, drive_list, siblings) {
+
+		if(dp->slot->media){
+			cmd = zalloc(MAX_BARCODE_LEN + 7);
+			if (!cmd) {
+				perror("Could not allocate memory");
+				exit(1);
+			}
+			sprintf(cmd, "lload %s", dp->slot->media->barcode);
+			/* Remove traling spaces */
+			truncate_spaces(&cmd[6], MAX_BARCODE_LEN + 1);
+
+			/* FIXME: About here would be a good spot to create any 'missing'
+			 *	  media. That way, the user would not have to pre-create
+			 *	  media.
+			 */
+
+			MHVTL_DBG(1, "About to send cmd: \'%s\'", cmd);
+
+			if(send_msg(cmd, dp->drv_id))
+				MHVTL_ERR("auto load tape failed");
+		}
+	}
+}
+
 /*
  * Return 0 - no address space conflict
  * Return 1 - overlap address with another slot type
@@ -946,6 +977,9 @@ static int check_overflow(struct lu_phy_attr *lu, int slot, char type)
 
 void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 {
+	int last_location = 0, slot_number = 0;
+	char element_type = ' ';
+	char *barcode;
 	struct s_info *sp = NULL;
 	struct d_info *dp = NULL;
 	struct smc_priv *smc_p = lu->lu_private;
@@ -970,8 +1004,33 @@ void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 	dp->slot->status = STATUS_Access;
 	smc_p->num_drives++;
 	if (strlen(s)) {
-		strncpy(dp->inq_product_sno, s, 10);
-		MHVTL_DBG(2, "Drive s/no: %s", s);
+		MHVTL_DBG(2, "string debug %s", s);
+		barcode = zalloc(MAX_BARCODE_LEN + 1);
+		if (!barcode) {
+			MHVTL_ERR("Couldn't malloc memory");
+			exit(-ENOMEM);
+		}
+
+		sscanf(s, "%[^@]@%c%d", barcode, &element_type, &slot_number);
+		switch (element_type) {
+		case 'M':
+			if (slot_number < smc_p->num_map)
+				last_location = slot_number + smc_p->pm->start_map - 1;
+			break;
+		case 'S':
+			if (slot_number < smc_p->num_storage)
+				last_location = slot_number + smc_p->pm->start_storage - 1;
+			break;
+		default:
+			MHVTL_ERR("element type error");
+			last_location = slot_number;
+		}
+		MHVTL_DBG(2, "String %s:Barcode %s in DRIVE %d, last_location %d", s, barcode, slt, last_location);
+
+		dp->slot->media = add_barcode(lu, barcode);
+		dp->slot->media->last_location = last_location;
+		dp->slot->last_location = last_location;
+		setFullStatus(dp->slot, 1);
 	}
 	MHVTL_DBG(3, "Slot: %d, start_drive: %d, slot_location: %d",
 			slt, smc_p->pm->start_drive, dp->slot->slot_location);
@@ -1207,11 +1266,10 @@ static void save_config(struct lu_phy_attr *lu)
 {
 	FILE *ctrl;
 	char conf[256];
+	char *barcode;
 	struct smc_priv *lu_priv;
 	struct list_head *slot_head;
-	struct list_head *drive_head;
 	struct s_info *sp;	/* Slot Pointer */
-	struct d_info *dp;	/* Drive Pointer */
 	int last_element_type = 0;
 
 	if (strlen(MHVTL_CONFIG_PATH LIBCONTENTS) >=
@@ -1228,45 +1286,15 @@ static void save_config(struct lu_phy_attr *lu)
 		return;
 	}
 
+	barcode = zalloc(MAX_BARCODE_LEN + 1);
+	if (!barcode) {
+		MHVTL_ERR("Couldn't malloc memory");
+		exit(-ENOMEM);
+	}
+
 	lu_priv = lu->lu_private;
 
-	drive_head = &lu_priv->drive_list;
 	slot_head = &lu_priv->slot_list;
-
-	/* Walk each drive and force-unload into previous location
-	 * - if possible */
-	list_for_each_entry(dp, drive_head, siblings) {
-		if (slotOccupied(dp->slot)) {
-			/* Force a move of media from drive into
-			 * empty storage slot on shutdown
-			 */
-			sp = dp->slot;
-			MHVTL_DBG(1, "Found %s in drive %d from %d",
-					sp->media->barcode,
-					sp->slot_location -
-						lu_priv->pm->start_drive + 1,
-					sp->last_location);
-			unload_drive_on_shutdown(sp,
-					previous_storage_slot(sp, slot_head));
-		}
-	}
-
-	/* Walk each drive and force-unload into first empty storage slot */
-	list_for_each_entry(dp, drive_head, siblings) {
-		if (slotOccupied(dp->slot)) {
-			/* Force a move of media from drive into
-			 * empty storage slot on shutdown
-			 */
-			sp = dp->slot;
-			MHVTL_DBG(1, "Found %s in drive %d from %d",
-					sp->media->barcode,
-					sp->slot_location -
-						lu_priv->pm->start_drive + 1,
-					sp->last_location);
-			unload_drive_on_shutdown(sp,
-					find_empty_storage_slot(sp, slot_head));
-		}
-	}
 
 	/* Walk the list of all slots and write data into .persist file */
 	list_for_each_entry(sp, slot_head, siblings) {
@@ -1280,9 +1308,43 @@ static void save_config(struct lu_phy_attr *lu)
 
 		switch (sp->element_type) {
 		case DATA_TRANSFER:
-			fprintf(ctrl, "Drive %d:\n",
+			fprintf(ctrl, "Drive %d: ",
 				sp->slot_location -
 						lu_priv->pm->start_drive + 1);
+			if (slotOccupied(sp)) {
+				strncpy(barcode, sp->media->barcode, MAX_BARCODE_LEN + 1);
+				truncate_spaces(barcode, MAX_BARCODE_LEN + 1);
+				fprintf(ctrl, "%s@", barcode);
+
+				struct s_info *last_sp = NULL;
+
+				list_for_each_entry(last_sp, slot_head, siblings) {
+					if (last_sp->slot_location == (unsigned int)sp->media->last_location)
+						break;
+				}
+
+				if (!last_sp) {
+					last_sp = find_empty_storage_slot(sp, slot_head);
+				}
+
+				if (!last_sp) {
+					fprintf(ctrl, "\n");
+					break;
+				}
+
+				switch (last_sp->element_type) {
+				case MAP_ELEMENT:
+					fprintf(ctrl, "M%d", last_sp->slot_location - lu_priv->pm->start_map + 1);
+					break;
+				case STORAGE_ELEMENT:
+					fprintf(ctrl, "S%d", last_sp->slot_location - lu_priv->pm->start_storage + 1);
+					break;
+				default:
+					MHVTL_ERR("element type error");
+					fprintf(ctrl, "%d", last_sp->slot_location);
+				}
+			}
+			fprintf(ctrl, "\n");
 			break;
 		case MEDIUM_TRANSPORT:
 			fprintf(ctrl, "Picker %d: %s\n",
@@ -1899,6 +1961,8 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
+
+	auto_load_tape(&lunit);	/* auto load tape to drive */
 
 	/* If debug, don't fork/run in background */
 	if (!debug) {

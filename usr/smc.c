@@ -975,7 +975,7 @@ static int check_tape_load(void)
 
 static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 {
-	int sock, ret = 0;
+	int sock = -1, ret = 0;
 	char message[30];
 	struct sockaddr_un servaddr;
 
@@ -1006,7 +1006,7 @@ static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 	MHVTL_DBG(2, "eject tape barcode: %s", s->media->barcode);
 
 	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
-		MHVTL_ERR("create socket failde, error: %s", strerror(errno));
+		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
 		goto eject;
 	}
 
@@ -1016,7 +1016,7 @@ static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 
 
 	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-		MHVTL_ERR("connect socket failde, error: %s", strerror(errno));
+		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
 		goto eject;
 	}
 
@@ -1032,7 +1032,7 @@ eject:
 	setSlotEmpty(s);
 	ret = 1;
 ret:
-	if (sock)
+	if (sock != -1)
 		close(sock);
 	if (barcode)
 		free(barcode);
