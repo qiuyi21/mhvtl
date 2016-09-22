@@ -1656,4 +1656,6 @@ void unload_drive_on_shutdown(struct s_info *src, struct s_info *dest)
 	MHVTL_DBG(1, "Force unload of media %s to slot %d",
 				src->media->barcode, dest->slot_location);
 	move_cart(src, dest);
+	src->media = dest->media;
+	setSlotFull(src);
 }
