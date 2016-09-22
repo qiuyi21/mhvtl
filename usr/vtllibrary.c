@@ -451,7 +451,6 @@ static int del_tape(struct q_msg *msg)
 
 	barcode = zalloc(MAX_BARCODE_LEN + 1);
 
-	/* No barcode - reject load */
 	if (!barcode) {
 		send_msg("Out of memory", msg->snd_id);
 		goto out;
@@ -799,7 +798,7 @@ static void update_drive_details(struct lu_phy_attr *lu)
 									drv_id);
 				dp = zalloc(sizeof(struct d_info));
 				if (!dp) {
-					MHVTL_ERR("Couldn't malloc memory");
+					MHVTL_ERR("Could not allocate memory");
 					exit(-ENOMEM);
 				}
 				sp = add_new_slot(lu);
@@ -878,6 +877,7 @@ static void auto_load_tape(struct lu_phy_attr *lu) {
 				MHVTL_ERR("auto load tape failed");
 		}
 	}
+	free (cmd);
 }
 
 /*
@@ -991,7 +991,7 @@ void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 	if (!dp) {
 		dp = zalloc(sizeof(struct d_info));
 		if (!dp) {
-			MHVTL_ERR("Couldn't malloc memory");
+			MHVTL_ERR("Could not allocate memory");
 			exit(-ENOMEM);
 		}
 		sp = add_new_slot(lu);
@@ -1004,10 +1004,10 @@ void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 	dp->slot->status = STATUS_Access;
 	smc_p->num_drives++;
 	if (strlen(s)) {
-		MHVTL_DBG(2, "string debug %s", s);
+		MHVTL_DBG(2, "drive info %s", s);
 		barcode = zalloc(MAX_BARCODE_LEN + 1);
 		if (!barcode) {
-			MHVTL_ERR("Couldn't malloc memory");
+			MHVTL_ERR("Could not allocate memory");
 			exit(-ENOMEM);
 		}
 
@@ -1035,6 +1035,7 @@ void init_drive_slot(struct lu_phy_attr *lu, int slt, char *s)
 	}
 	MHVTL_DBG(3, "Slot: %d, start_drive: %d, slot_location: %d",
 			slt, smc_p->pm->start_drive, dp->slot->slot_location);
+	free (barcode);
 }
 
 void init_map_slot(struct lu_phy_attr *lu, int slt, char *barcode)
@@ -1270,7 +1271,7 @@ static void save_config(struct lu_phy_attr *lu)
 
 	barcode = zalloc(MAX_BARCODE_LEN + 1);
 	if (!barcode) {
-		MHVTL_ERR("Couldn't malloc memory");
+		MHVTL_ERR("Could not allocate memory");
 		exit(-ENOMEM);
 	}
 
@@ -1348,6 +1349,7 @@ static void save_config(struct lu_phy_attr *lu)
 			break;
 		}
 	}
+	free (barcode);
 	fclose(ctrl);
 }
 
