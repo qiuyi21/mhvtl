@@ -404,6 +404,7 @@ struct d_info {
 	int SCSI_ID;
 	int SCSI_LUN;
 	char tapeLoaded;	/* Tape is 'loaded' by drive */
+	char barcode[MAX_BARCODE_LEN + 1];
 	struct s_info *slot;
 };
 
