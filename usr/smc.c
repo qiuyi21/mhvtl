@@ -1304,14 +1304,6 @@ static int move_drive2slot(struct smc_priv *smc_p,
 		return SAM_STAT_CHECK_CONDITION;
 	}
 
-	/* if dest slot is MAP, Eject */
-	if (dest->element_type == MAP_ELEMENT) {
-		if (eject_tape(smc_p, src->slot))
-			return SAM_STAT_GOOD;
-		else
-			return SAM_STAT_CHECK_CONDITION;
-	}
-
 	if (slotOccupied(dest)) {
 		sam_illegal_request(E_MEDIUM_DEST_FULL, NULL, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;
@@ -1668,6 +1660,4 @@ void unload_drive_on_shutdown(struct s_info *src, struct s_info *dest)
 	MHVTL_DBG(1, "Force unload of media %s to slot %d",
 				src->media->barcode, dest->slot_location);
 	move_cart(src, dest);
-	src->media = dest->media;
-	setSlotFull(src);
 }
