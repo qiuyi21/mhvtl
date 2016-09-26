@@ -1,22 +1,42 @@
-# Disable the building of the debug package(s).
-%define debug_package %{nil}
+%{!?kversion:
+    %{?kdir:%define kversion %{expand:%%(
+        make -sC "%{kdir}" kernelversion | grep -v ^make)}
+    }
+    %{!?kdir:
+        %define kversion %{expand:%%(
+            if rpm --quiet -q kernel-headers; then
+                rpm -q --qf '%%%%{BUILDTIME} %%%%{version}-%%%%{release}.%%%%{arch}\\n' \\
+                    kernel-headers | sort | tail -n1 | { read a b; echo $b; };
+            else
+                uname -r;
+            fi
+        )}
+    }
+}
+%{echo:kversion=%{kversion}}
+
+%define krpmver %{expand:%%(
+            echo -n "%%{kversion}" | sed -e 's/\\.[^.]\\{1,\\}$//'
+        )}
+
 
 Summary: Virtual tape library. kernel pseudo HBA driver + userspace daemons
-%define real_name mhvtl
-Name: mhvtl-utils
-%define real_version 2016-03-10
+Name: mhvtl
 Version: 1.5
-Release: 4%{?dist}
+Release: 5%{?dist}
 License: GPL
 Group: System/Kernel
 URL: http://sites.google.com/site/linuxvtl2/
 
-Source: mhvtl-%{real_version}.tgz
+Source: mhvtl-2016-09-26.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-build-%(%{__id_u} -n)
 
-BuildRequires: zlib-devel
+BuildRequires:   zlib-devel, redhat-rpm-config, kernel-devel, lzo-devel
+Requires:        glibc, zlib, initscripts >= 8.36, gawk, util-linux, mhvtl-kmod
+Requires(pre):   glibc-common, shadow-utils
+Requires(post):  chkconfig
+Requires(preun): chkconfig
 
-Obsoletes: mhvtl <= %{version}-%{release}
 Provides: mhvtl = %{version}-%{release}
 
 %description
@@ -33,43 +53,62 @@ via /dev/mhvtl? device nodes.
 The kernel module is based on the scsi_debug driver.
 The SSC/SMC target daemons have been written from scratch.
 
+%package kmod
+Summary:  Virtual tape library kernel module
+Requires: kmod, kernel = %{krpmver}, util-linux
+
+%description kmod
+Virtual tape library kernel module
+
 %prep
-%setup -n %{real_name}-%{version}
+%setup -n mhvtl-%{version}
 
 %build
 %{__make} RPM_OPT_FLAGS="%{optflags}" VERSION="%{version}.%{release}" usr
 %{__make} RPM_OPT_FLAGS="%{optflags}" VERSION="%{version}.%{release}" INITD="%{_initrddir}" etc
 %{__make} RPM_OPT_FLAGS="%{optflags}" VERSION="%{version}.%{release}" scripts
+%{__make} -C kernel
 
 %install
 %{__rm} -rf %{buildroot}
 %{__make} install DESTDIR="%{buildroot}" INITD="%{_initrddir}" LIBDIR="%{_libdir}"
-
-%pre
-if ! getent group vtl &>/dev/null; then
-   groupadd -r vtl
-fi
-if ! getent passwd vtl &>/dev/null; then
-   useradd -r -g vtl -c "VTL daemon" -d /opt/mhvtl -s /bin/bash vtl
-fi
-
-%post
-/sbin/ldconfig
-/sbin/chkconfig --add mhvtl
-
-%preun
-if (( $1 == 0 )); then
-    /sbin/service mhvtl shutdown &>/dev/null || :
-    /sbin/chkconfig --del mhvtl
-fi
-
-%postun -p /sbin/ldconfig
+KINST="%{buildroot}/lib/modules/%{kversion}/kernel/drivers/scsi"
+%{__mkdir} -p "$KINST"
+%{__install} -m 644 kernel/mhvtl.ko "$KINST/"
 
 %clean
 %{__rm} -rf %{buildroot}
 
+%pre
+if ! getent group vtl >/dev/null; then
+	groupadd -r vtl
+fi
+if ! getent passwd vtl >/dev/null; then
+	useradd -r -g vtl -c "VTL daemon" -d /opt/mhvtl -s /bin/bash vtl
+fi
+
+%post
+ldconfig
+chkconfig --add mhvtl
+chkconfig mhvtl off
+grep -qs systemd /proc/1/comm && systemctl daemon-reload
+exit 0
+
+%preun
+if (( $1 == 0 )); then
+	cd "%{_initrddir}"
+	./mhvtl stop >/dev/null 2>&1
+	chkconfig --del mhvtl
+	grep -qs systemd /proc/1/comm && systemctl daemon-reload
+fi
+exit 0
+
+%postun
+ldconfig
+exit 0
+
 %files
-%defattr(-, vtl, vtl, 0755)
+%defattr(644,root,root,755)
 %doc INSTALL README etc/library_contents.sample
 %doc %{_mandir}/man1/build_library_config.1*
 %doc %{_mandir}/man1/mhvtl.1*
@@ -82,68 +121,39 @@ fi
 %doc %{_mandir}/man5/device.conf.5*
 %doc %{_mandir}/man5/mhvtl.conf.5*
 %doc %{_mandir}/man5/library_contents.5*
-%config %{_initrddir}/mhvtl
-%{_bindir}/vtlcmd
-%{_bindir}/mktape
-%{_bindir}/edit_tape
-%{_bindir}/dump_tape
-%{_bindir}/tapeexerciser
-%{_bindir}/build_library_config
-%{_bindir}/make_vtl_media
-%{_bindir}/update_device.conf
+%attr(754,root,root) %{_initrddir}/mhvtl
+%attr(755,root,root) %{_bindir}/vtlcmd
+%attr(755,root,root) %{_bindir}/mktape
+%attr(755,root,root) %{_bindir}/edit_tape
+%attr(755,root,root) %{_bindir}/dump_tape
+%attr(755,root,root) %{_bindir}/tapeexerciser
+%attr(755,root,root) %{_bindir}/build_library_config
+%attr(755,root,root) %{_bindir}/make_vtl_media
+%attr(755,root,root) %{_bindir}/update_device.conf
 %{_libdir}/libvtlscsi.so
 %{_libdir}/libvtlcart.so
+%attr(755,root,root) %{_bindir}/vtltape
+%attr(755,root,root) %{_bindir}/vtllibrary
+%dir %attr(770,vtl,vtl) /opt/mhvtl
 
-%defattr(4750, root, vtl, 0755)
-%{_bindir}/vtltape
-%{_bindir}/vtllibrary
+%post kmod
+depmod -a %{kversion}
+exit 0
 
-%defattr(-, vtl, vtl, 2770)
-/opt/mhvtl/
+%preun kmod
+if (( $1 == 0 )); then
+	cd "%{_initrddir}"
+	./mhvtl shutdown >/dev/null 2>&1
+	rmmod mhvtl
+	Q_EXISTS=`ipcs -q | awk '/4d61726b/ {print $2}'`
+	[ -n "$Q_EXISTS" ] && ipcrm -q $Q_EXISTS
+fi
+exit 0
 
-%changelog
-* Thu Mar 10 2016 Mark Harvey <markh794@gmail.com> - 1.5-4
-- Updated to release 1.5-4 (2016-03-10).
+%postun kmod
+depmod -a %{kversion}
+exit 0
 
-* Tue Apr 14 2015 Mark Harvey <markh794@gmail.com> - 1.5-3
-- Updated to release 1.5-3 (2015-04-14).
-
-* Sun Sep 7 2014 Mark Harvey <markh794@gmail.com> - 1.5-2
-- Updated to release 1.5-2 (2014-09-04).
-
-* Sun Apr 13 2014 Mark Harvey <markh794@gmail.com> - 1.5-0
-- Updated to release 1.5-0 (2014-04-13).
-
-* Sun Oct 20 2013 Mark Harvey <markh794@gmail.com> - 1.4-10
-- Updated to release 1.4-10 (2013-10-20).
-
-* Thu Aug 29 2013 Mark Harvey <markh794@gmail.com> - 1.4-9
-- Updated to release 1.4-9 (2013-08-29).
-
-* Sat Jun 29 2013 Mark Harvey <markh794@gmail.com> - 1.4-8
-- Updated to release 1.4-8 (2013-06-29).
-
-* Fri Mar 22 2013 Mark Harvey <markh794@gmail.com> - 1.4-7
-- Updated to release 1.4-7 (2013-03-22).
-
-* Thu Jan 31 2013 Mark Harvey <markh794@gmail.com> - 1.4-6
-- Updated to release 1.4-6 (2013-01-31).
-
-* Sat Jan 12 2013 Mark Harvey <markh794@gmail.com> - 1.4-5
-- Updated to release 1.4-5 (2013-01-12).
-
-* Thu Aug 13 2012 Mark Harvey <markh794@gmail.com> - 1.4-4
-- Updated to release 1.4-4 (2012-09-13).
-
-* Wed Aug  8 2012 Mark Harvey <markh794@gmail.com> - 1.4-1
-- Updated to release 1.4-1 (2012-08-08).
-
-* Wed Aug  1 2012 Mark Harvey <markh794@gmail.com> - 1.4-0
-- Updated to release 1.4 (2012-08-01).
-- install using Makefile
-
-* Thu Jun 21 2012 Dag Wieers <dag@wieers.com> - 1.3-1
-- Updated to release 1.3 (2012-06-15).
-
-* Thu Aug 05 2010 Dag Wieers <dag@wieers.com> - 0.18-11
-- Initial build of the kmod package.
+%files kmod
+%defattr(644,root,root,755)
+/lib/modules/%{kversion}/kernel/drivers/scsi/mhvtl.ko
