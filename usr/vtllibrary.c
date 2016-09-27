@@ -1575,7 +1575,7 @@ static void auto_load_tape(int cdev, uint8_t *buf, struct lu_phy_attr *lu, long 
 				cmd.dbuf_p->serialNo++;
 
 				cmd.scb = zalloc(MAX_COMMAND_SIZE);
-				if (cmd.scb) {
+				if (!cmd.scb) {
 					MHVTL_ERR("Problems allocating memory");
 					exit(1);
 				}
@@ -1896,6 +1896,7 @@ int main(int argc, char *argv[])
 	}
 
 	chrdev_chown(my_id, pw->pw_uid, pw->pw_gid);
+	oom_adjust();
 
 	/* Now that we have created the lu, drop root uid/gid */
 	if (setgid(pw->pw_gid)) {
@@ -2023,8 +2024,6 @@ int main(int argc, char *argv[])
 	MHVTL_LOG("Started %s: version %s, verbose log lvl: %d, lu [%d:%d:%d]",
 					progname, MHVTL_VERSION, verbose,
 					ctl.channel, ctl.id, ctl.lun);
-
-	oom_adjust();
 
 	/* If fifoname passed as switch */
 	if (fifoname)
