@@ -2917,6 +2917,7 @@ int main(int argc, char *argv[])
 	}
 
 	chrdev_chown(minor, pw->pw_uid, pw->pw_gid);
+	oom_adjust();
 
 	if (setgid(pw->pw_gid)) {
 		perror("Unable to change gid");
@@ -2989,8 +2990,6 @@ int main(int argc, char *argv[])
 					progname, MHVTL_VERSION, verbose,
 					ctl.channel, ctl.id, ctl.lun);
 	MHVTL_DBG(1, "Size of buffer is %d", lu_ssc.bufsize);
-
-	oom_adjust();
 
 	new_action.sa_handler = caught_signal;
 	new_action.sa_flags = 0;
