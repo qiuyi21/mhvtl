@@ -2983,7 +2983,9 @@ int main(int argc, char *argv[])
 		}
 
 		close(STDIN_FILENO);
+		if (open("/dev/null", O_RDWR) != STDIN_FILENO) { exit(-2); }
 		close(STDERR_FILENO);
+		if (dup(STDIN_FILENO) != STDERR_FILENO) { exit(-2); }
 	}
 
 	MHVTL_LOG("Started %s: version %s, verbose log lvl: %d, lu [%d:%d:%d]",

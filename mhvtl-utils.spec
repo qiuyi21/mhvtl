@@ -31,7 +31,7 @@ URL: http://sites.google.com/site/linuxvtl2/
 Source: mhvtl-2016-09-26.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-build-%(%{__id_u} -n)
 
-BuildRequires:   zlib-devel, redhat-rpm-config, kernel-devel, lzo-devel
+BuildRequires:   zlib-devel, redhat-rpm-config, kernel-devel
 Requires:        glibc, zlib, initscripts >= 8.36, gawk, util-linux, mhvtl-kmod
 Requires(pre):   glibc-common, shadow-utils
 Requires(post):  chkconfig
