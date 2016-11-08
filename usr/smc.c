@@ -1111,12 +1111,55 @@ static int move_slot2drive(struct smc_priv *smc_p,
 	struct s_info *src;
 	struct d_info *dest;
 	char cmd[MAX_BARCODE_LEN + 12];
+	char barcode[MAX_BARCODE_LEN + 1];
 	int retval;
+	int sock = -1;
+	char message[30];
+	struct sockaddr_un servaddr;
+	ssize_t st;
 
 	current_state = MHVTL_STATE_MOVING_SLOT_2_DRIVE;
 
 	src  = slot2struct(smc_p, src_addr);
 	dest = drive2struct(smc_p, dest_addr);
+
+	strncpy(&barcode[0], src->media->barcode, MAX_BARCODE_LEN + 1);
+	truncate_spaces(&barcode[0], MAX_BARCODE_LEN + 1);
+	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
+		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
+		return SAM_STAT_CHECK_CONDITION;
+	}
+
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sun_family = AF_UNIX;
+	strcpy(servaddr.sun_path, SOCK_PATH);
+
+	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
+		goto ret;
+	}
+
+	sprintf(message, "load %s", barcode);
+	if (write(sock, message, strlen(message)) < 0) {
+		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
+		goto ret;
+	}
+	MHVTL_DBG(2, "Send message to sgw service:%s", message);
+	st = read(sock, message, 30);
+	if (st < 0) {
+		MHVTL_ERR("can't catch message from sock, message: '%s' , error: %s", message, strerror(errno));
+		goto ret;
+	}
+
+	message[st] = '\0';
+
+	if (strcmp(message, "SUCCESS") != 0) {
+		MHVTL_ERR("load vol faild, message: '%s'", message);
+ret:
+		if (sock != -1)
+			close(sock);
+		return SAM_STAT_CHECK_CONDITION;
+	}
 
 	if (!slotOccupied(src)) {
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
@@ -1290,14 +1333,21 @@ static int move_drive2slot(struct smc_priv *smc_p,
 			int src_addr, int dest_addr, uint8_t *sam_stat)
 {
 	char cmd[MAX_BARCODE_LEN + 1];
+	char barcode[MAX_BARCODE_LEN + 1];
 	struct d_info *src;
 	struct s_info *dest;
 	int retval;
+	int sock = -1;
+	char message[30];
+	struct sockaddr_un servaddr;
 
 	current_state = MHVTL_STATE_MOVING_DRIVE_2_SLOT;
 
 	src  = drive2struct(smc_p, src_addr);
 	dest = slot2struct(smc_p, dest_addr);
+
+	strncpy(&barcode[0], src->slot->media->barcode, MAX_BARCODE_LEN + 1);
+	truncate_spaces(&barcode[0], MAX_BARCODE_LEN + 1);
 
 	if (!driveOccupied(src)) {
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
@@ -1339,6 +1389,29 @@ static int move_drive2slot(struct smc_priv *smc_p,
 	move_cart(src->slot, dest);
 	setDriveEmpty(src);
 
+	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
+		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
+		return SAM_STAT_CHECK_CONDITION;
+	}
+
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sun_family = AF_UNIX;
+	strcpy(servaddr.sun_path, SOCK_PATH);
+
+	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
+		goto ret;
+	}
+
+	sprintf(message, "unload %s", barcode);
+	MHVTL_DBG(2, "Send message to sgw service:%s", message);
+	if (write(sock, message, strlen(message)) < 0) {
+		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
+	}
+
+ret:
+	if (sock != -1)
+		close(sock);
 return retval;
 }
 
