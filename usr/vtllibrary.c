@@ -1476,6 +1476,10 @@ static int init_lu(struct lu_phy_attr *lu, unsigned minor, struct vtl_ctl *ctl)
 				MHVTL_DBG(1, "NAA: Incorrect params: %s"
 						", Using defaults", b);
 			}
+			if (sscanf(b, " SOCK: %s", s)) {
+				MHVTL_DBG(1, "sock path=%s", s);
+				set_sock_path(s);
+			}
 		}
 	}
 	fclose(conf);

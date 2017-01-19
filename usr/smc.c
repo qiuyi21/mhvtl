@@ -37,6 +37,9 @@
 #include <assert.h>
 #include <sys/socket.h>		/* for socket to connect server */
 #include <sys/un.h>			/* too ...*/
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <stdarg.h>
 #include "be_byteshift.h"
 #include "scsi.h"
 #include "list.h"
@@ -979,23 +982,183 @@ static int check_tape_load(void)
 	return strncmp("Loaded OK", q.msg.text, 9);
 }
 
+static char *m_sock_path = NULL;
+void set_sock_path(const char *path) {
+	if (path && *path) {
+		if (strlen(path) >= sizeof(((struct sockaddr_un *) NULL)->sun_path)) {
+			MHVTL_ERR("sock path too long");
+			return;
+		}
+		if (m_sock_path) free(m_sock_path);
+		m_sock_path = strdup(path);
+		if (!m_sock_path) MHVTL_ERR("out of memory");
+	} else if (m_sock_path) {
+		free(m_sock_path);
+		m_sock_path = NULL;
+	}
+}
+
+static void sock_dump(const char *msg, const char *buf, uint16_t buflen) {
+	size_t mlen, slen;
+	char *s, *p;
+
+	if (!debug && (verbose & 3) < 1) return;
+
+	mlen = strlen(msg);
+	slen = mlen + buflen * 4 + 8;
+	p = s = malloc(slen);
+	if (!s) {
+		MHVTL_ERR("out of memory");
+		return;
+	}
+
+	memcpy(p, msg, mlen);
+	p += mlen;
+	for (mlen = 0; mlen < buflen; mlen++) {
+		sprintf(p, "%02hhX ", buf[mlen]);
+		p += 3;
+	}
+	*p++ = '(';
+	memcpy(p, buf, buflen);
+	p += buflen;
+	*p++ = ')';
+	*p = '\0';
+
+	if (debug)
+		puts(s);
+	else
+		syslog(LOG_DAEMON | LOG_INFO, "%s", s);
+
+	free(s);
+}
+
+static char *sock_read(int sock, char *buf, uint16_t buflen) {
+	char *ret = NULL;
+	int n;
+	fd_set rdset, errset;
+	struct timeval timout;
+	socklen_t scklen;
+
+	for (;;) {
+		FD_ZERO(&rdset);
+		FD_ZERO(&errset);
+		FD_SET(sock, &rdset);
+		FD_SET(sock, &errset);
+		timout.tv_sec = 120;
+		timout.tv_usec = 0;
+		if (select(sock + 1, &rdset, NULL, &errset, &timout) < 0) {
+			if (errno == EINTR) continue;
+			MHVTL_ERR("select error: %s", strerror(errno));
+			break;
+		}
+		if (FD_ISSET(sock, &errset)) {
+			n = 0;
+			scklen = sizeof(n);
+			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &n, &scklen) < 0) {
+				MHVTL_ERR("getsockopt error: %s", strerror(errno));
+			} else if (n) {
+				MHVTL_ERR("read socket error: %d %s", n, strerror(n));
+			} else {
+				MHVTL_ERR("read socket encounter unknown error");
+			}
+			break;
+		}
+		if (FD_ISSET(sock, &rdset)) {
+			n = read(sock, buf, buflen);
+			if (n <= 0) {
+				MHVTL_ERR("read socket error: %s", strerror(n ? errno : ECONNRESET));
+				break;
+			} else if (n) {
+				ret = malloc(n + 1);
+				if (!ret) {
+					MHVTL_ERR("out of memory");
+					break;
+				}
+				memcpy(ret, buf, n);
+				ret[n] = '\0';
+				sock_dump("read socket: ", buf, n);
+			}
+		} else {
+			MHVTL_ERR("read socket timeout");
+		}
+		break;
+	}
+
+	return ret;
+}
+
+static uint8_t sock_communicate(int *fd, char **recv_msg, uint16_t recv_msg_len, const char *sndtpl, ...) {
+	uint8_t ret = 0;
+	int sock = -1, n;
+	struct sockaddr_un servaddr;
+	va_list ap;
+	char buf[256];
+
+	if (!fd || *fd < 0) {
+		if (!m_sock_path) return 2;
+
+		sock = socket(PF_UNIX, SOCK_STREAM, 0);
+		if (sock < 0) {
+			MHVTL_ERR("create socket error: %s", strerror(errno));
+			return ret;
+		}
+
+		memset(&servaddr, 0, sizeof(servaddr));
+		servaddr.sun_family = AF_UNIX;
+		strcpy(servaddr.sun_path, m_sock_path);
+
+		if (connect(sock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0) {
+			MHVTL_ERR("connect socket error: %s", strerror(errno));
+			goto out;
+		}
+	} else {
+		sock = *fd;
+	}
+
+	va_start(ap, sndtpl);
+	n = vsnprintf(buf + 1, sizeof(buf) - 1, sndtpl, ap);
+	va_end(ap);
+	if (n < 0) {
+		MHVTL_ERR("vsnprintf error");
+		goto out;
+	} else if (n >= sizeof(buf) - 1) {
+		MHVTL_ERR("vsnprintf error: message too long");
+		goto out;
+	}
+
+	buf[0] = n;
+	if (write(sock, buf, n + 1) < 0) {
+		MHVTL_ERR("send '%s' error: %s", buf + 1, strerror(errno));
+		goto out;
+	}
+	sock_dump("write socket: ", buf, n + 1);
+
+	if (recv_msg) {
+		*recv_msg = sock_read(sock, buf, recv_msg_len);
+		if (!(*recv_msg)) goto out;
+	}
+
+	ret = 1;
+
+out:
+	if (sock >= 0) {
+		if (!fd) {
+			shutdown(sock, SHUT_WR);
+			close(sock);
+		} else {
+			*fd = sock;
+		}
+	}
+	return ret;
+}
+
 static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 {
-	int sock = -1, ret = 0;
-	char message[30];
-	struct sockaddr_un servaddr;
-
-	char *barcode;
+	char barcode[MAX_BARCODE_LEN + 1];
 	char src_type;
 	int src_num;
 
-	barcode = zalloc(MAX_BARCODE_LEN + 1);
-	if (!barcode){
-		MHVTL_ERR("memory out");
-		goto ret;
-	}
-
-	memcpy(barcode, &s->media->barcode, MAX_BARCODE_LEN + 1);
+	memcpy(barcode, s->media->barcode, MAX_BARCODE_LEN + 1);
 	truncate_spaces(barcode, MAX_BARCODE_LEN + 1);
 
 	if (s->element_type == DATA_TRANSFER){
@@ -1006,42 +1169,18 @@ static int eject_tape(struct smc_priv *smc_p, struct s_info *s)
 		src_num = s->slot_location - smc_p->pm->start_storage + 1;
 	}else{
 		MHVTL_ERR("can't eject element type: %d", s->element_type);
-		goto ret;
+		return 0;
 	}
 
 	list_del(&s->media->siblings);		/* Delete media from media_list */
 	s->media = NULL;
 	s->last_location = 0;		/* Forget where the old media was */
 	setSlotEmpty(s);
-	ret = 1;
 
-	MHVTL_DBG(2, "eject tape barcode: %s", s->media->barcode);
+	MHVTL_DBG(2, "eject tape barcode: %s", barcode);
+	sock_communicate(NULL, NULL, 0, "eject %s@%c%d", barcode, src_type, src_num);
 
-	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
-		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
-		goto ret;
-	}
-
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sun_family = AF_UNIX;
-	strcpy(servaddr.sun_path, SOCK_PATH);
-
-	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
-		goto ret;
-	}
-
-	sprintf(message, "eject %s@%c%d", barcode, src_type, src_num);
-	if (write(sock, message, strlen(message)) < 0) {
-		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
-	}
-
-ret:
-	if (sock != -1)
-		close(sock);
-	if (barcode)
-		free(barcode);
-	return ret;
+	return 1;
 }
 
 /*
@@ -1112,68 +1251,39 @@ static int move_slot2drive(struct smc_priv *smc_p,
 	struct d_info *dest;
 	char cmd[MAX_BARCODE_LEN + 12];
 	char barcode[MAX_BARCODE_LEN + 1];
-	int retval;
+	int retval = SAM_STAT_CHECK_CONDITION;
+	char *recv_msg = NULL;
 	int sock = -1;
-	char message[30];
-	struct sockaddr_un servaddr;
-	ssize_t st;
 
 	current_state = MHVTL_STATE_MOVING_SLOT_2_DRIVE;
 
 	src  = slot2struct(smc_p, src_addr);
 	dest = drive2struct(smc_p, dest_addr);
 
-	strncpy(&barcode[0], src->media->barcode, MAX_BARCODE_LEN + 1);
-	truncate_spaces(&barcode[0], MAX_BARCODE_LEN + 1);
-	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
-		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
-		return SAM_STAT_CHECK_CONDITION;
-	}
+	memcpy(barcode, src->media->barcode, MAX_BARCODE_LEN + 1);
+	truncate_spaces(barcode, MAX_BARCODE_LEN + 1);
 
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sun_family = AF_UNIX;
-	strcpy(servaddr.sun_path, SOCK_PATH);
-
-	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
-		goto ret;
-	}
-
-	sprintf(message, "load %s", barcode);
-	if (write(sock, message, strlen(message)) < 0) {
-		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
-		goto ret;
-	}
-	MHVTL_DBG(2, "Send message to sgw service:%s", message);
-	st = read(sock, message, 30);
-	if (st < 0) {
-		MHVTL_ERR("can't catch message from sock, message: '%s' , error: %s", message, strerror(errno));
-		goto ret;
-	}
-
-	message[st] = '\0';
-
-	if (strcmp(message, "SUCCESS") != 0) {
-		MHVTL_ERR("load vol faild, message: '%s'", message);
-ret:
-		if (sock != -1)
-			close(sock);
-		return SAM_STAT_CHECK_CONDITION;
+	switch (sock_communicate(&sock, &recv_msg, 7, "load %s", barcode)) {
+	case 2: break;
+	case 0: goto out;
+	default:
+		if (strcmp(recv_msg, "SUCCESS")) goto out;
+		break;
 	}
 
 	if (!slotOccupied(src)) {
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
-		return SAM_STAT_CHECK_CONDITION;
+		goto out;
 	}
 	if (driveOccupied(dest)) {
 		sam_illegal_request(E_MEDIUM_DEST_FULL, NULL, sam_stat);
-		return SAM_STAT_CHECK_CONDITION;
+		goto out;
 	}
 	if (src->element_type == MAP_ELEMENT) {
 		if (!map_access_ok(smc_p, src)) {
 			MHVTL_DBG(2, "SOURCE MAP port not accessable");
 			sam_not_ready(E_MAP_OPEN, sam_stat);
-			return SAM_STAT_CHECK_CONDITION;
+			goto out;
 		}
 	}
 
@@ -1195,8 +1305,8 @@ ret:
 		smc_p->state_msg = (char *)zalloc(DEF_SMC_PRIV_STATE_MSG_LENGTH);
 	if (smc_p->state_msg) {
 		/* Re-use 'cmd[]' var */
-		sprintf(cmd, "%s", src->media->barcode);
-		truncate_spaces(&cmd[0], MAX_BARCODE_LEN + 1);
+		memcpy(cmd, src->media->barcode, MAX_BARCODE_LEN + 1);
+		truncate_spaces(cmd, MAX_BARCODE_LEN + 1);
 
 		sprintf(smc_p->state_msg,
 			"Moving %s from %s slot %d to drive %d",
@@ -1210,17 +1320,23 @@ ret:
 		MHVTL_ERR("Load of %s into drive %d failed",
 					cmd, slot_number(smc_p->pm, dest->slot));
 		sam_hardware_error(E_MANUAL_INTERVENTION_REQ, sam_stat);
-		return SAM_STAT_CHECK_CONDITION;
+		goto out;
 	}
 
 	retval = run_move_command(smc_p, src, dest->slot, sam_stat);
-	if (retval)
-		return retval;
+	if (retval) goto out;
 	move_cart(src, dest->slot);
 	setDriveFull(dest);
 	/* Set the 'Access bit' to zero - i.e. the picker arm can't access it */
 	setAccessStatus(dest->slot, 0);
 
+out:
+	if (recv_msg) free(recv_msg);
+	if (sock >= 0) {
+		sock_communicate(&sock, NULL, 0, retval ? "FAILED" : "SUCCESS");
+		shutdown(sock, SHUT_WR);
+		close(sock);
+	}
 	return retval;
 }
 
@@ -1337,17 +1453,14 @@ static int move_drive2slot(struct smc_priv *smc_p,
 	struct d_info *src;
 	struct s_info *dest;
 	int retval;
-	int sock = -1;
-	char message[30];
-	struct sockaddr_un servaddr;
 
 	current_state = MHVTL_STATE_MOVING_DRIVE_2_SLOT;
 
 	src  = drive2struct(smc_p, src_addr);
 	dest = slot2struct(smc_p, dest_addr);
 
-	strncpy(&barcode[0], src->slot->media->barcode, MAX_BARCODE_LEN + 1);
-	truncate_spaces(&barcode[0], MAX_BARCODE_LEN + 1);
+	memcpy(barcode, src->slot->media->barcode, MAX_BARCODE_LEN + 1);
+	truncate_spaces(barcode, MAX_BARCODE_LEN + 1);
 
 	if (!driveOccupied(src)) {
 		sam_illegal_request(E_MEDIUM_SRC_EMPTY, NULL, sam_stat);
@@ -1373,8 +1486,8 @@ static int move_drive2slot(struct smc_priv *smc_p,
 	if (!smc_p->state_msg)
 		smc_p->state_msg = zalloc(64);
 	if (smc_p->state_msg) {
-		sprintf(cmd, "%s", src->slot->media->barcode);
-		truncate_spaces(&cmd[0], MAX_BARCODE_LEN + 1);
+		memcpy(cmd, src->slot->media->barcode, MAX_BARCODE_LEN + 1);
+		truncate_spaces(cmd, MAX_BARCODE_LEN + 1);
 		sprintf(smc_p->state_msg,
 			"Moving %s from drive %d to %s slot %d",
 					cmd,
@@ -1389,30 +1502,9 @@ static int move_drive2slot(struct smc_priv *smc_p,
 	move_cart(src->slot, dest);
 	setDriveEmpty(src);
 
-	if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
-		MHVTL_ERR("create socket failed, error: %s", strerror(errno));
-		return SAM_STAT_CHECK_CONDITION;
-	}
+	sock_communicate(NULL, NULL, 0, "unload %s", barcode);
 
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sun_family = AF_UNIX;
-	strcpy(servaddr.sun_path, SOCK_PATH);
-
-	if (connect(sock, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-		MHVTL_ERR("connect socket failed, error: %s", strerror(errno));
-		goto ret;
-	}
-
-	sprintf(message, "unload %s", barcode);
-	MHVTL_DBG(2, "Send message to sgw service:%s", message);
-	if (write(sock, message, strlen(message)) < 0) {
-		MHVTL_ERR("send '%s' failed, error: %s", message, strerror(errno));
-	}
-
-ret:
-	if (sock != -1)
-		close(sock);
-return retval;
+	return retval;
 }
 
 /* Move media in drive 'src_addr' to drive 'dest_addr' */
