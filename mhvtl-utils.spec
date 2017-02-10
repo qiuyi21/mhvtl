@@ -84,7 +84,7 @@ if ! getent group vtl >/dev/null; then
 	groupadd -r vtl
 fi
 if ! getent passwd vtl >/dev/null; then
-	useradd -r -g vtl -c "VTL daemon" -d /opt/mhvtl -s /bin/bash vtl
+	useradd -r -g vtl -c "VTL daemon" -d /opt/mhvtl -s /sbin/nologin vtl
 fi
 
 %post
@@ -144,7 +144,7 @@ exit 0
 if (( $1 == 0 )); then
 	cd "%{_initrddir}"
 	./mhvtl shutdown >/dev/null 2>&1
-	rmmod mhvtl
+	rmmod mhvtl >/dev/null 2>&1
 	Q_EXISTS=`ipcs -q | awk '/4d61726b/ {print $2}'`
 	[ -n "$Q_EXISTS" ] && ipcrm -q $Q_EXISTS
 fi

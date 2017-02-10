@@ -59,7 +59,7 @@ int init_queue(void)
 	return queue_id;
 }
 
-int send_msg(char *cmd, long rcv_id)
+int send_msg_ex(char *cmd, long rcv_id, long snd_id)
 {
 	int len, s_qid;
 	struct q_entry s_entry;
@@ -70,8 +70,9 @@ int send_msg(char *cmd, long rcv_id)
 	if (s_qid == -1)
 		return -1;
 
+	if (!snd_id) snd_id = my_id;
 	s_entry.rcv_id = rcv_id;
-	s_entry.msg.snd_id = my_id;
+	s_entry.msg.snd_id = snd_id;
 	strcpy(s_entry.msg.text, cmd);
 	len = strlen(s_entry.msg.text) + 1 + offsetof(struct q_entry, msg.text);
 

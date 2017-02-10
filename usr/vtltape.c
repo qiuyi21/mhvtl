@@ -2039,13 +2039,11 @@ static int processMessageQ(struct q_msg *msg, uint8_t *sam_stat)
 	/* Tape Load message from Library */
 	if (!strncmp(msg->text, "lload", 5)) {
 		if (!lu_ssc.inLibrary) {
-			MHVTL_DBG(2, "lload & drive not in library");
-			return 0;
-		}
-
-		if (lu_ssc.tapeLoaded != TAPE_UNLOADED) {
+			MHVTL_ERR("do lload but drive not in library");
+			sprintf(s, "Load failed: %s", strip_PCL(msg->text, 6));
+		} else if (lu_ssc.tapeLoaded != TAPE_UNLOADED) {
 			MHVTL_DBG(2, "Tape already mounted");
-			send_msg("Load failed", msg->snd_id);
+			sprintf(s, "Load failed: %s", strip_PCL(msg->text, 6));
 		} else {
 			/* 'lload ' => offset of 6 */
 			pcl = strip_PCL(msg->text, 6);
@@ -2055,8 +2053,9 @@ static int processMessageQ(struct q_msg *msg, uint8_t *sam_stat)
 				sprintf(s, "Load failed: %s", pcl);
 			else
 				sprintf(s, "Loaded OK: %s", pcl);
-			send_msg(s, msg->snd_id);
 		}
+		send_msg(s, msg->snd_id);
+		goto out;
 	}
 
 	/* Tape Load message from User space */
@@ -2213,7 +2212,8 @@ static int processMessageQ(struct q_msg *msg, uint8_t *sam_stat)
 	if (!strncmp(msg->text, "dump", 4))
 		dump_linked_list();
 
-return 0;
+out:
+	return 0;
 }
 
 /*
@@ -3034,6 +3034,9 @@ int main(int argc, char *argv[])
 							strerror(errno));
 			}
 		}
+		mlen = msgrcv(r_qid, &lu_ssc.r_entry, MAXOBN, my_id | (1L << 62), IPC_NOWAIT);
+		if (mlen > 0 && processMessageQ(&lu_ssc.r_entry.msg, &lu_ssc.sam_status))
+			goto exit;
 		ret = ioctl(cdev, VTL_POLL_AND_GET_HEADER, &vtl_cmd);
 		if (ret < 0) {
 			MHVTL_DBG(2,

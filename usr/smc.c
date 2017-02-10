@@ -963,7 +963,7 @@ uint8_t smc_read_element_status(struct scsi_cmd *cmd)
 
  * FIXME: I really need a timeout here..
  */
-static int check_tape_load(void)
+static int check_tape_load(long drv_id)
 {
 	int mlen, r_qid;
 	struct q_entry q;
@@ -975,11 +975,15 @@ static int check_tape_load(void)
 		exit(1);
 	}
 
-	mlen = msgrcv(r_qid, &q, MAXOBN, my_id, MSG_NOERROR);
-	if (mlen > 0)
+	mlen = msgrcv(r_qid, &q, MAXOBN, my_id + drv_id, MSG_NOERROR);
+	if (mlen > 0) {
 		MHVTL_DBG(2, "Received \"%s\" from message Q", q.msg.text);
-
-	return strncmp("Loaded OK", q.msg.text, 9);
+		if (q.msg.snd_id != drv_id) {
+			MHVTL_ERR("message sender error %ld!=%ld", q.msg.snd_id, drv_id);
+		}
+		return strncmp("Loaded OK", q.msg.text, 9);
+	}
+	return -1;
 }
 
 static char *m_sock_path = NULL;
@@ -989,7 +993,10 @@ void set_sock_path(const char *path) {
 			MHVTL_ERR("sock path too long");
 			return;
 		}
-		if (m_sock_path) free(m_sock_path);
+		if (m_sock_path) {
+			if (!strcmp(m_sock_path, path)) return;
+			free(m_sock_path);
+		}
 		m_sock_path = strdup(path);
 		if (!m_sock_path) MHVTL_ERR("out of memory");
 	} else if (m_sock_path) {
@@ -1032,58 +1039,21 @@ static void sock_dump(const char *msg, const char *buf, uint16_t buflen) {
 	free(s);
 }
 
-static char *sock_read(int sock, char *buf, uint16_t buflen) {
+static inline char *sock_read(int sock, char *buf, uint16_t buflen) {
 	char *ret = NULL;
-	int n;
-	fd_set rdset, errset;
-	struct timeval timout;
-	socklen_t scklen;
-
-	for (;;) {
-		FD_ZERO(&rdset);
-		FD_ZERO(&errset);
-		FD_SET(sock, &rdset);
-		FD_SET(sock, &errset);
-		timout.tv_sec = 120;
-		timout.tv_usec = 0;
-		if (select(sock + 1, &rdset, NULL, &errset, &timout) < 0) {
-			if (errno == EINTR) continue;
-			MHVTL_ERR("select error: %s", strerror(errno));
-			break;
-		}
-		if (FD_ISSET(sock, &errset)) {
-			n = 0;
-			scklen = sizeof(n);
-			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &n, &scklen) < 0) {
-				MHVTL_ERR("getsockopt error: %s", strerror(errno));
-			} else if (n) {
-				MHVTL_ERR("read socket error: %d %s", n, strerror(n));
-			} else {
-				MHVTL_ERR("read socket encounter unknown error");
-			}
-			break;
-		}
-		if (FD_ISSET(sock, &rdset)) {
-			n = read(sock, buf, buflen);
-			if (n <= 0) {
-				MHVTL_ERR("read socket error: %s", strerror(n ? errno : ECONNRESET));
-				break;
-			} else if (n) {
-				ret = malloc(n + 1);
-				if (!ret) {
-					MHVTL_ERR("out of memory");
-					break;
-				}
-				memcpy(ret, buf, n);
-				ret[n] = '\0';
-				sock_dump("read socket: ", buf, n);
-			}
+	int n = read(sock, buf, buflen);
+	if (n <= 0) {
+		MHVTL_ERR("read socket error: %s", n ? strerror(errno) : "closed by peer");
+	} else {
+		ret = malloc(n + 1);
+		if (!ret) {
+			MHVTL_ERR("out of memory");
 		} else {
-			MHVTL_ERR("read socket timeout");
+			memcpy(ret, buf, n);
+			ret[n] = '\0';
+			sock_dump("read socket: ", buf, n);
 		}
-		break;
 	}
-
 	return ret;
 }
 
@@ -1097,7 +1067,7 @@ static uint8_t sock_communicate(int *fd, char **recv_msg, uint16_t recv_msg_len,
 	if (!fd || *fd < 0) {
 		if (!m_sock_path) return 2;
 
-		sock = socket(PF_UNIX, SOCK_STREAM, 0);
+		sock = socket(AF_UNIX, SOCK_STREAM, 0);
 		if (sock < 0) {
 			MHVTL_ERR("create socket error: %s", strerror(errno));
 			return ret;
@@ -1299,7 +1269,7 @@ static int move_slot2drive(struct smc_priv *smc_p,
 	MHVTL_DBG(1, "About to send cmd: \'%s\' to drive %d",
 					cmd, slot_number(smc_p->pm, dest->slot));
 
-	send_msg(cmd, dest->drv_id);
+	send_msg_ex(cmd, dest->drv_id, my_id + dest->drv_id);
 
 	if (!smc_p->state_msg)
 		smc_p->state_msg = (char *)zalloc(DEF_SMC_PRIV_STATE_MSG_LENGTH);
@@ -1316,7 +1286,7 @@ static int move_slot2drive(struct smc_priv *smc_p,
 					slot_number(smc_p->pm, dest->slot));
 	}
 
-	if (check_tape_load()) {
+	if (check_tape_load(dest->drv_id)) {
 		MHVTL_ERR("Load of %s into drive %d failed",
 					cmd, slot_number(smc_p->pm, dest->slot));
 		sam_hardware_error(E_MANUAL_INTERVENTION_REQ, sam_stat);
@@ -1548,9 +1518,9 @@ static int move_drive2drive(struct smc_priv *smc_p,
 	MHVTL_DBG(2, "Sending cmd: \'%s\' to drive %d",
 				cmd, slot_number(smc_p->pm, dest->slot));
 
-	send_msg(cmd, dest->drv_id);
+	send_msg_ex(cmd, dest->drv_id, my_id + dest->drv_id);
 
-	if (check_tape_load()) {
+	if (check_tape_load(dest->drv_id)) {
 		/* Failed, so put the tape back where it came from */
 		MHVTL_ERR("Failed to move to drive %d, "
 				"placing back into drive %d",
@@ -1559,8 +1529,8 @@ static int move_drive2drive(struct smc_priv *smc_p,
 		move_cart(dest->slot, src->slot);
 		sprintf(cmd, "lload %s", src->slot->media->barcode);
 		truncate_spaces(&cmd[6], MAX_BARCODE_LEN + 1);
-		send_msg(cmd, src->drv_id);
-		check_tape_load();
+		send_msg_ex(cmd, src->drv_id, my_id + src->drv_id);
+		check_tape_load(src->drv_id);
 		sam_hardware_error(E_MANUAL_INTERVENTION_REQ, sam_stat);
 		return SAM_STAT_CHECK_CONDITION;
 	}

@@ -590,7 +590,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (SendMsg(ReceiverQid, deviceNo, buf) < 0) {
+	if (SendMsg(ReceiverQid, deviceNo | (1L << 62), buf) < 0) {
 		fprintf(stderr, "Message Queue Error: send message\n");
 		exit(1);
 	}

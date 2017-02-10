@@ -682,40 +682,62 @@ static int processMessageQ(struct q_msg *msg)
 			debug++;
 			verbose = 2;
 		}
+		goto out;
 	}
-	if (!strncmp(msg->text, "add slot", 8))
+	if (!strncmp(msg->text, "add slot", 8)) {
 		add_storage_slot(msg);
-	if (!strncmp(msg->text, "del tape ", 9))
+		goto out;
+	}
+	if (!strncmp(msg->text, "del tape ", 9)) {
 		del_tape(msg);
-	if (!strncmp(msg->text, "empty map", 9))
+		goto out;
+	}
+	if (!strncmp(msg->text, "empty map", 9)) {
 		empty_map(msg);
-	if (!strncmp(msg->text, "ejected", 7))
+		goto out;
+	}
+	if (!strncmp(msg->text, "ejected", 7)) {
 		set_access_bit(msg);
+		goto out;
+	}
 	if (!strncmp(msg->text, "exit", 4))
 		return 1;
-	if (!strncmp(msg->text, "open map", 8))
+	if (!strncmp(msg->text, "open map", 8)) {
 		open_map(msg);
-	if (!strncmp(msg->text, "close map", 9))
+		goto out;
+	}
+	if (!strncmp(msg->text, "close map", 9)) {
 		close_map(msg);
-	if (!strncmp(msg->text, "list map", 8))
+		goto out;
+	}
+	if (!strncmp(msg->text, "list map", 8)) {
 		list_map(msg);
-	if (!strncmp(msg->text, "load map ", 9))
+		goto out;
+	}
+	if (!strncmp(msg->text, "load map ", 9)) {
 		load_map(msg);
-	if (!strncmp(msg->text, "saveconfig", 10))
+		goto out;
+	}
+	if (!strncmp(msg->text, "saveconfig", 10)) {
 		if (lunit.persist)
 			save_config(&lunit);
+		goto out;
+	}
 	if (!strncmp(msg->text, "offline", 7)) {
 		current_state = MHVTL_STATE_OFFLINE;
 		lunit.online = 0;
+		goto out;
 	}
 	if (!strncmp(msg->text, "online", 6)) {
 		current_state = MHVTL_STATE_ONLINE;
 		lunit.online = 1;
+		goto out;
 	}
 	if (!strncmp(msg->text, "TapeAlert", 9)) {
 		uint64_t flg = TA_NONE;
 		sscanf(msg->text, "TapeAlert %" PRIx64, &flg);
 		set_TapeAlert(&lunit, flg);
+		goto out;
 	}
 	if (!strncmp(msg->text, "verbose", 7)) {
 		if (verbose)
@@ -724,9 +746,13 @@ static int processMessageQ(struct q_msg *msg)
 			verbose = 3;
 		MHVTL_LOG("verbose: %s at level %d",
 				 verbose ? "enabled" : "disabled", verbose);
+		goto out;
 	}
 
-return 0;
+	MHVTL_ERR("unknown message from %ld: %s", msg->snd_id, msg->text);
+
+out:
+	return 0;
 }
 
 static struct d_info *lookup_drive(struct lu_phy_attr *lu, int drive_no)
@@ -1422,6 +1448,7 @@ static int init_lu(struct lu_phy_attr *lu, unsigned minor, struct vtl_ctl *ctl)
 			if (sscanf(b, " Unit serial number: %s", s)) {
 				checkstrlen(s, SCSI_SN_LEN, linecount);
 				snprintf(lu->lu_serial_no, SCSI_SN_LEN, "%-14s", s);
+				continue;
 			}
 			if (sscanf(b, " Product identification: %16c", s) > 0) {
 				/* sscanf does not NULL terminate */
@@ -1429,32 +1456,43 @@ static int init_lu(struct lu_phy_attr *lu, unsigned minor, struct vtl_ctl *ctl)
 				s[i] = '\0';
 				snprintf(lu->product_id, PRODUCT_ID_LEN + 1, "%-16s", s);
 				sprintf(&lu->inquiry[16], "%-16s", s);
+				continue;
 			}
 			if (sscanf(b, " Product revision level: %s", s)) {
 				checkstrlen(s, PRODUCT_REV_LEN, linecount);
 				sprintf(&lu->inquiry[32], "%-4s", s);
+				continue;
 			}
 			if (sscanf(b, " Vendor identification: %s", s)) {
 				checkstrlen(s, VENDOR_ID_LEN, linecount);
 				sprintf(lu->vendor_id, "%-8s", s);
 				sprintf(&lu->inquiry[8], "%-8s", s);
+				continue;
 			}
-			if (sscanf(b, " fifo: %s", s))
+			if (sscanf(b, " fifo: %s", s)) {
 				process_fifoname(lu, s, 0);
+				continue;
+			}
 			if (sscanf(b, " PERSIST: %s", s)) {
 				if (!strncasecmp(s, "yes", 3) ||
 						 (!strncasecmp(s, "true", 4)))
 					lu->persist = TRUE;
+				continue;
 			}
-			if (sscanf(b, " movecommand: %s", s))
+			if (sscanf(b, " movecommand: %s", s)) {
 				smc_slots.movecommand = strndup(s, MALLOC_SZ);
-			if (sscanf(b, " commandtimeout: %d", &d))
+				continue;
+			}
+			if (sscanf(b, " commandtimeout: %d", &d)) {
 				smc_slots.commandtimeout = d;
+				continue;
+			}
 			if (sscanf(b, " Backoff: %d", &i)) {
 				if ((i > 1) && (i < 10000)) {
 					MHVTL_DBG(1, "Backoff value: %d", i);
 					backoff = i;
 				}
+				continue;
 			}
 			i = sscanf(b,
 				" NAA: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
@@ -1467,6 +1505,7 @@ static int init_lu(struct lu_phy_attr *lu, unsigned minor, struct vtl_ctl *ctl)
 				"%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
 					c, d, e, f, g, h, j, k);
 				MHVTL_DBG(2, "Setting NAA: to %s", lu->naa);
+				continue;
 			} else if (i > 0) {
 				free(lu->naa);
 				lu->naa = NULL;
@@ -1475,10 +1514,12 @@ static int init_lu(struct lu_phy_attr *lu, unsigned minor, struct vtl_ctl *ctl)
 				rmnl(b, '\0', MALLOC_SZ);
 				MHVTL_DBG(1, "NAA: Incorrect params: %s"
 						", Using defaults", b);
+				continue;
 			}
 			if (sscanf(b, " SOCK: %s", s)) {
 				MHVTL_DBG(1, "sock path=%s", s);
 				set_sock_path(s);
+				continue;
 			}
 		}
 	}
@@ -1551,7 +1592,7 @@ static void process_cmd(int cdev, uint8_t *buf, struct vtl_header *vtl_cmd,
 }
 
 /* if drive have media, auto load tape to drive */
-static void auto_load_tape(int cdev, uint8_t *buf, struct lu_phy_attr *lu, long pollInterval) {
+static void auto_load_tape(int cdev, uint8_t *buf, struct lu_phy_attr *lu) {
 	struct smc_priv *smc_p = lu->lu_private;
 	struct list_head *drive_list = &smc_p->drive_list;
 	struct list_head *slot_list = &smc_p->slot_list;
@@ -1932,6 +1973,9 @@ int main(int argc, char *argv[])
 		MHVTL_DBG(2, "Found \"%s\" still in message Q", r_entry.msg.text);
 		mlen = msgrcv(r_qid, &r_entry, MAXOBN, my_id, IPC_NOWAIT);
 	}
+	do {
+		mlen = msgrcv(r_qid, &r_entry, MAXOBN, my_id | (1L << 62), IPC_NOWAIT);
+	} while (mlen > 0);
 
 	cdev = chrdev_open(name, my_id);
 	if (cdev == -1) {
@@ -2046,7 +2090,7 @@ int main(int argc, char *argv[])
 		MHVTL_ERR("Failed to set fifo count()...");
 	}
 
-	auto_load_tape(cdev, buf, &lunit, pollInterval);	/* auto load tape to drive */
+	auto_load_tape(cdev, buf, &lunit);	/* auto load tape to drive */
 	lunit.online = 1; /* Mark unit online */
 
 	for (;;) {
@@ -2062,9 +2106,13 @@ int main(int argc, char *argv[])
 					strerror(errno));
 		}
 
+		mlen = msgrcv(r_qid, &r_entry, MAXOBN, my_id | (1L << 62), IPC_NOWAIT);
+		if (mlen > 0 && processMessageQ(&r_entry.msg))
+			goto exit;
+
 		ret = ioctl(cdev, VTL_POLL_AND_GET_HEADER, &vtl_cmd);
 		if (ret < 0) {
-			MHVTL_LOG("ret: %d : %s", ret, strerror(errno));
+			MHVTL_ERR("ioctl(0x%x) error: %s", VTL_POLL_AND_GET_HEADER, strerror(errno));
 		} else {
 			if (child_cleanup) {
 				if (waitpid(child_cleanup, NULL, WNOHANG)) {

@@ -50,7 +50,8 @@ struct q_entry {
 
 
 int enter(char *, long rcv_id);
-int send_msg(char *cmd, long rcv_id);
+int send_msg_ex(char *cmd, long rcv_id, long snd_id);
+#define send_msg(C,I) send_msg_ex(C,I,0)
 int serve(void);
 int init_queue(void);
 
